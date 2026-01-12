@@ -1,0 +1,19 @@
+{
+  "local_dir": "/home/vishal/sync_folder",
+  "peer": {
+    "host": "192.168.1.101",
+    "port": 5555
+  },
+  "certs": {
+    "cert": "/home/vishal/sync_certs/linux.cert",
+    "key": "/home/vishal/sync_certs/linux.key",
+    "peer_cert": "/home/vishal/sync_certs/android.cert"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5555
+  },
+  "debounce_ms": 800,
+  "mtime_skew_sec": 2,
+  "max_concurrency": 1
+}
