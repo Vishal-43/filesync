@@ -3,35 +3,119 @@ import socket
 import ssl
 import json
 import os
+from config import get_config
+from sync_core import scan_dir
 
-CERT_DIR = os.path.expanduser('~/sync-certs')
-CLIENT_CERT = os.path.join(CERT_DIR, 'android.crt')
-CLIENT_KEY = os.path.join(CERT_DIR, 'android.key')
-SERVER_CERT = os.path.join(CERT_DIR, 'linux.crt')
-
-
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-context.load_cert_chain(CLIENT_CERT, CLIENT_KEY)
-context.load_verify_locations(SERVER_CERT)
-context.check_hostname = False
-context.verify_mode = ssl.CERT_REQUIRED
-
-print(f"Using client certificate: {CLIENT_CERT}")
+# CERT_DIR = os.path.expanduser('~/sync-certs')
+# CLIENT_CERT = os.path.join(CERT_DIR, 'android.crt')
+# CLIENT_KEY = os.path.join(CERT_DIR, 'android.key')
+# SERVER_CERT = os.path.join(CERT_DIR, 'linux.crt')
 
 
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client_socket = context.wrap_socket(client_socket, server_hostname='127.0.0.1')
+# context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+# context.load_cert_chain(CLIENT_CERT, CLIENT_KEY)
+# context.load_verify_locations(SERVER_CERT)
+# context.check_hostname = False
+# context.verify_mode = ssl.CERT_REQUIRED
 
-print("Connecting to server on port 5555...")
-client_socket.connect(('127.0.0.1',5555))
-print("Connected to server.")
+# print(f"Using client certificate: {CLIENT_CERT}")
 
-message = {"type":"echo","content":"hello from client"}
-client_socket.send(json.dumps(message).encode('utf-8'))
-print("Message sent to server.")
 
-response_data = client_socket.recv(4096)
-print(f"Response from server: {json.loads(response_data.decode('utf-8'))}")
+# client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# client_socket = context.wrap_socket(client_socket, server_hostname='127.0.0.1')
 
-client_socket.close()
-print("connection closed")
+# print("Connecting to server on port 5555...")
+# client_socket.connect(('127.0.0.1',5555))
+# print("Connected to server.")
+
+# message = {"type":"list"}
+# client_socket.send(json.dumps(message).encode('utf-8'))
+# print("Message sent to server.")
+
+# response_data = client_socket.recv(16384)
+# resp_dict = json.loads(response_data.decode('utf-8'))
+# print(f"recived {len(resp_dict['files'])} files:")
+# for f in resp_dict['files']:
+#     print(f"File: {f['path']} Size: {f['size']} Mtime: {f['mtime']}") 
+
+# client_socket.close()
+# print("connection closed")
+
+def recv_all(client_socket, chunk=8192):
+    chunks = []
+    while True:
+        data = client_socket.recv(chunk)
+        if not data:
+            break
+        chunks.append(data)
+    
+
+    return b"".join(chunks)
+
+def make_client_context(CLIENT_CERT,CLIENT_KEY,SERVER_CERT):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_cert_chain(CLIENT_CERT, CLIENT_KEY)
+    context.load_verify_locations(SERVER_CERT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_REQUIRED
+    return context
+
+def request_list(host,port,context):
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    with context.wrap_socket(client_socket,server_hostname=host) as tls:
+        tls.connect((host,port))
+        message = {"type":"list"}
+        tls.send(json.dumps(message).encode('utf-8'))
+        raw = recv_all(tls)
+    resp = json.loads(raw.decode('utf-8'))
+    assert resp.get('type') == "list_response", f"unexpected response type: {resp}" 
+    return resp["files"]
+
+def get_cert():
+    CERT_DIR = os.path.expanduser('~/sync-certs')
+    CLIENT_CERT = os.path.join(CERT_DIR, 'android.crt')
+    CLIENT_KEY = os.path.join(CERT_DIR, 'android.key')
+    SERVER_CERT = os.path.join(CERT_DIR, 'linux.crt')
+    if not os.path.exists(CERT_DIR):
+        raise SystemExit(f"Certificate directory '{CERT_DIR}' does not exist.")
+    if not os.path.isfile(SERVER_CERT):
+        raise SystemExit(f"Server certificate '{CLIENT_CERT}' does not exist.")
+    if not os.path.isfile(CLIENT_KEY):
+        raise SystemExit(f"Client key '{CLIENT_KEY}' does not exist.")
+    if not os.path.isfile(SERVER_CERT):
+        raise SystemExit(f"Server certificate '{SERVER_CERT}' does not exist.")
+
+    return CLIENT_CERT,CLIENT_KEY,SERVER_CERT
+def to_map(entries):
+    return {e["path"]:e for e in entries}
+def compute_actions(local_files,remote_files,skew_sec=2.0):
+    action = {"push":[],"pull":[],"skip":[]}
+    L = to_map(local_files)
+    R = to_map(remote_files)
+    all_paths = set(L) | set(R)
+    for p in all_paths:
+        le = L.get(p)
+        re = R.get(p)
+        if le and not re:
+            action["push"].append(le)
+        elif re and not le:
+            action["pull"].append(re)
+        else:
+            dt = (le["mtime"]-re["mtime"])
+            if abs(dt) <=skew_sec:
+                action["skip"].append(p)
+            elif dt > 0:
+                action["push"].append(p)
+            else:
+                action["pull"].append(p)
+    return action
+
+if __name__ == "__main__":
+    config = get_config()
+    r_files = request_list(config["server"]["host"],config["server"]["port"],make_client_context(*get_cert()))
+    l_files = scan_dir(config['local_dir'])
+    actions = compute_actions(l_files,r_files)
+    print(f"Summary: push={len(actions['push'])}, pull={len(actions['pull'])}, skip={len(actions['skip'])}")
+    for k in ("push","pull"):
+        for e in actions[k]:
+            print(f"{k.upper()}: {e['path']} Size: {e['size']} Mtime: {e['mtime']}")
