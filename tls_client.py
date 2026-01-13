@@ -110,12 +110,72 @@ def compute_actions(local_files,remote_files,skew_sec=2.0):
                 action["pull"].append(p)
     return action
 
+def push(host,port,context, local_file, remote_path):
+    size = os.path.getsize(local_file)
+    s = socket.socket(socket.AF_INET,socket.SOCK_STREAM) 
+    with context.wrap_socket(s,server_hostname=host) as tls:
+        tls.connect((host,port))
+
+        msg = {"type":"push","path":remote_path,"size":size}
+        tls.send(json.dumps(msg).encode('utf-8'))
+        with open(local_file,'rb') as f:
+            sent = 0
+            while sent < size:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
+                tls.send(chunk)
+                sent += len(chunk)
+
+        ack = recv_all(tls)
+        resp = json.loads(ack.decode('utf-8'))
+        print(f"Push response: {resp}")
+        return resp
+
+def pull(host,port,context,remote_path, local_file):
+    s = socket.socket(socket.AF_INET,socket.SOCK_STREAM) 
+    with context.wrap_socket(s,server_hostname=host) as tls:
+        tls.connect((host,port))
+
+        msg = {"type":"pull","path":remote_path}
+        tls.send(json.dumps(msg).encode("utf-8"))
+        print(f"pulling {remote_path} to {local_file}")
+
+        meta_raw = tls.recv(8192)
+        meta = json.loads(meta_raw.decode("utf-8"))
+        if meta.get("type") == "error":
+            print(f"Error from server: {meta.get('message')}")
+            return meta
+        size = meta.get("size")
+        temp_file = local_file + ".part"
+        os.makedirs(os.path.dirname(local_file),exist_ok=True)
+        with open(temp_file,"wb") as f:
+            recived = 0
+            while recived < size:
+                chunk = tls.recv(8192)
+                if not chunk:
+                    break
+                f.write(chunk)
+                recived += len(chunk)
+        if recived != size:
+            print(f"ERROR: size mismatch. Expected {size}, got {recived}")
+            return {"type":"error","message":"size_mismatch"}
+        os.replace(temp_file,local_file)
+       
+        print(f"File '{remote_path}' pulled successfully.")
+        return local_file
 if __name__ == "__main__":
     config = get_config()
-    r_files = request_list(config["server"]["host"],config["server"]["port"],make_client_context(*get_cert()))
+    r_files = request_list(config["peer"]["host"],config["peer"]["port"],make_client_context(*get_cert()))
     l_files = scan_dir(config['local_dir'])
     actions = compute_actions(l_files,r_files)
     print(f"Summary: push={len(actions['push'])}, pull={len(actions['pull'])}, skip={len(actions['skip'])}")
     for k in ("push","pull"):
         for e in actions[k]:
             print(f"{k.upper()}: {e['path']} Size: {e['size']} Mtime: {e['mtime']}")
+    test_file = "/home/vishal/sync_folder/test_push.txt"
+    with open(test_file, 'w') as f:
+        f.write("hello from push test")
+    push(config["peer"]["host"], config["peer"]["port"], make_client_context(*get_cert()), test_file, "test_push.txt")
+
+    pull(config["peer"]["host"], config["peer"]["port"], make_client_context(*get_cert()), "test1.txt", os.path.expanduser("~/sync_folder/test_push.txt"))

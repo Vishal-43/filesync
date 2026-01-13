@@ -1,6 +1,17 @@
 import os 
 import json
 from config import get_config
+import hashlib
+
+def compute_hash(file_path):
+    sha = hashlib.sha256()
+    with open(file_path,'rb') as f:
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
+            sha.update(chunk)
+    return sha.hexdigest()
 
 def compute_entry(local_dir,abs_path):
     rel_path = os.path.relpath(abs_path,local_dir)
