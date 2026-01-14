@@ -58,6 +58,7 @@ def handle_client(client_socket, client_address):
             elif message.get('type') == "push":
                 path = message.get('path')
                 size = message.get('size')
+                mtime = message.get('mtime') 
 
                 cfg = get_config()
                 local_dir = cfg['local_dir']
@@ -79,6 +80,12 @@ def handle_client(client_socket, client_address):
                     response = {"type": "error", "message": "size_mismatch"}
                 else:
                     os.replace(temp_path, abs_path)
+                   
+                    if mtime is not None:
+                        try:
+                            os.utime(abs_path, (mtime, mtime))
+                        except Exception as e:
+                            print(f"[{client_address}] warning: could not set mtime for {path}: {e}")
                     print(f"[{client_address}],File saved: {path}")
                     response = {"type": "ack", "message": "push ok"}
 
@@ -93,10 +100,11 @@ def handle_client(client_socket, client_address):
                     print(f"[{client_address}] ERROR: {path} not found")
                 else:
                     size = os.path.getsize(abs_path)
+                    mtime = os.path.getmtime(abs_path)
                     print(f"[{client_address}] Sending {path} ({size} bytes)")
 
                     # send metadata first
-                    meta = {"type": "pull_response", "path": path, "size": size}
+                    meta = {"type": "pull_response", "path": path, "size": size, "mtime": mtime}
                     tls_conn.send(json.dumps(meta).encode("utf-8"))
 
                     # stream file
