@@ -164,18 +164,74 @@ def pull(host,port,context,remote_path, local_file):
        
         print(f"File '{remote_path}' pulled successfully.")
         return local_file
+def sync(host,port,context,local_dir,actions):
+    push_count,pull_count = 0, 0
+    for a in actions["push"]:
+        if isinstance(a,dict):
+            path = a["path"]
+        else:
+            path = a
+
+        local_file = os.path.join(local_dir,path)
+        if os.path.exists(local_file):
+            print(f"Push:{path}")
+            push(host,port,context,local_file,path)
+            push_count += 1
+        else:
+            print(f"Push: {path} not found")
+
+    for a in actions["pull"]:
+        if isinstance(a,dict):
+            path = a["path"]
+        else:
+            path = a
+        local_file = os.path.join(local_dir,path)
+        print(f"Pull:{path}")
+        pull(host,port,context,path,local_file)
+        pull_count += 1
+    print(f"Sync complete. Pushed {push_count} files, Pulled {pull_count} files.")
 if __name__ == "__main__":
     config = get_config()
-    r_files = request_list(config["peer"]["host"],config["peer"]["port"],make_client_context(*get_cert()))
-    l_files = scan_dir(config['local_dir'])
-    actions = compute_actions(l_files,r_files)
-    print(f"Summary: push={len(actions['push'])}, pull={len(actions['pull'])}, skip={len(actions['skip'])}")
-    for k in ("push","pull"):
-        for e in actions[k]:
-            print(f"{k.upper()}: {e['path']} Size: {e['size']} Mtime: {e['mtime']}")
-    test_file = "/home/vishal/sync_folder/test_push.txt"
-    with open(test_file, 'w') as f:
-        f.write("hello from push test")
-    push(config["peer"]["host"], config["peer"]["port"], make_client_context(*get_cert()), test_file, "test_push.txt")
-
-    pull(config["peer"]["host"], config["peer"]["port"], make_client_context(*get_cert()), "test1.txt", os.path.expanduser("~/sync_folder/test_push.txt"))
+    host = config["peer"]["host"]
+    port = config["peer"]["port"]
+    local_dir = config["local_dir"]
+    context = make_client_context(*get_cert())
+    
+    print("=" * 50)
+    print("LAN File Sync - Full Test")
+    print("=" * 50)
+    
+    # Get file lists
+    print("\n1. Fetching remote file list...")
+    r_files = request_list(host, port, context)
+    print(f"   Remote: {len(r_files)} files")
+    
+    print("\n2. Scanning local directory...")
+    l_files = scan_dir(local_dir)
+    print(f"   Local: {len(l_files)} files")
+    
+    # Compute actions
+    print("\n3. Computing sync actions...")
+    actions = compute_actions(l_files, r_files, skew_sec=config.get("mtime_skew_sec", 2))
+    print(f"   Actions: {len(actions['push'])} push, {len(actions['pull'])} pull, {len(actions['skip'])} skip")
+    
+    # Show samples
+    if actions["push"]:
+        print(f"\n   Sample PUSH files:")
+        for item in actions["push"][:3]:
+            p = item["path"] if isinstance(item, dict) else item
+            print(f"      → {p}")
+    
+    if actions["pull"]:
+        print(f"\n   Sample PULL files:")
+        for item in actions["pull"][:3]:
+            p = item["path"] if isinstance(item, dict) else item
+            print(f"      ← {p}")
+    
+    # Execute sync
+    print("\n4. Executing sync...")
+    sync(host, port, context, local_dir, actions)
+    
+    print("\n" + "=" * 50)
+    print("✓ Sync test complete!")
+    print("=" * 50)
